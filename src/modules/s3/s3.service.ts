@@ -2,7 +2,6 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   S3Client,
-  PutObjectAclCommand,
   HeadObjectCommand,
   PutObjectCommand,
   GetObjectCommand,
@@ -67,10 +66,11 @@ export class S3Service {
     objectKey: string,
     buffer: Buffer,
     mimeType: string,
+    bucket?: string,
   ): Promise<void> {
     await this.client.send(
       new PutObjectCommand({
-        Bucket: this.bucket,
+        Bucket: bucket ?? this.bucket,
         Key: objectKey,
         Body: buffer,
         ContentType: mimeType,

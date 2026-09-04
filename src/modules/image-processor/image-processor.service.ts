@@ -2,6 +2,7 @@ import { Injectable, Inject, Logger } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import sharp from 'sharp';
 import { S3Service } from '../s3/s3.service';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class ImageProcessorService {
@@ -9,6 +10,7 @@ export class ImageProcessorService {
 
   constructor(
     private readonly s3Service: S3Service,
+    private readonly config: ConfigService,
     @Inject('MEDIA_PROCESSING_SERVICE')
     private readonly rabbitClient: ClientProxy,
   ) {}
@@ -20,6 +22,7 @@ export class ImageProcessorService {
   }) {
     try {
       const original = await this.s3Service.downloadObject(event.objectKey);
+      const placeholder = await this.generatePlaceholder(original);
 
       const thumbnailBuffer = await sharp(original)
         .resize(200, 200, { fit: 'cover' })
@@ -43,7 +46,7 @@ export class ImageProcessorService {
 
       this.rabbitClient.emit('image.processed', {
         mediaId: event.mediaId,
-        variants: { thumbnail: thumbnailKey, medium: mediumKey },
+        variants: { thumbnail: thumbnailKey, medium: mediumKey, placeholder },
       });
 
       this.logger.log(`Обработано изображение ${event.mediaId}`);
@@ -59,6 +62,7 @@ export class ImageProcessorService {
   }) {
     try {
       const original = await this.s3Service.downloadObject(event.objectKey);
+      const placeholder = await this.generatePlaceholder(original);
       const { x, y, size } = event.crop;
 
       const squareBuffer = await sharp(original)
@@ -76,11 +80,17 @@ export class ImageProcessorService {
         .toBuffer();
 
       const avatarKey = event.objectKey.replace(/(\.\w+)$/, '_avatar.png');
-      await this.s3Service.uploadBuffer(avatarKey, avatarBuffer, 'image/png');
+      const avatarBucket = this.config.getOrThrow<string>('AVATAR_BUCKET');
+      await this.s3Service.uploadBuffer(
+        avatarKey,
+        avatarBuffer,
+        'image/png',
+        avatarBucket,
+      );
 
       this.rabbitClient.emit('image.processed', {
         mediaId: event.mediaId,
-        variants: { avatar: avatarKey },
+        variants: { avatar: avatarKey, placeholder },
       });
 
       this.logger.log(`Аватар обработан: ${event.mediaId}`);
@@ -89,5 +99,15 @@ export class ImageProcessorService {
         `Ошибка обработки аватара ${event.mediaId}: ${error.message}`,
       );
     }
+  }
+
+  async generatePlaceholder(original: Buffer): Promise<string> {
+    const buffer = await sharp(original)
+      .resize(20)
+      .blur(2)
+      .jpeg({ quality: 30 })
+      .toBuffer();
+
+    return `data:image/jpeg;base64,${buffer.toString('base64')}`;
   }
 }
