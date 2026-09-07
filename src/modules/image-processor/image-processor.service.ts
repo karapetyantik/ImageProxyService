@@ -1,8 +1,19 @@
-import { Injectable, Inject, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  Logger,
+  BadRequestException,
+} from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import sharp from 'sharp';
-import { S3Service } from '../s3/s3.service';
+import { S3Service } from '@modules/s3/s3.service';
 import { ConfigService } from '@nestjs/config';
+
+interface Crop {
+  x: number;
+  y: number;
+  size: number;
+}
 
 @Injectable()
 export class ImageProcessorService {
@@ -20,7 +31,7 @@ export class ImageProcessorService {
     objectKey: string;
     mimeType: string;
   }) {
-    try {
+    await this.runProcessingJob(event.mediaId, async () => {
       const original = await this.s3Service.downloadObject(event.objectKey);
       const placeholder = await this.generatePlaceholder(original);
 
@@ -34,8 +45,8 @@ export class ImageProcessorService {
         .jpeg({ quality: 85 })
         .toBuffer();
 
-      const thumbnailKey = event.objectKey.replace(/(\.\w+)$/, '_thumb.jpg');
-      const mediumKey = event.objectKey.replace(/(\.\w+)$/, '_medium.jpg');
+      const thumbnailKey = deriveVariantKey(event.objectKey, '_thumb.jpg');
+      const mediumKey = deriveVariantKey(event.objectKey, '_medium.jpg');
 
       await this.s3Service.uploadBuffer(
         thumbnailKey,
@@ -50,17 +61,17 @@ export class ImageProcessorService {
       });
 
       this.logger.log(`Обработано изображение ${event.mediaId}`);
-    } catch (error) {
-      this.logger.error(`Ошибка обработки ${event.mediaId}: ${error.message}`);
-    }
+    });
   }
 
   async processAvatar(event: {
     mediaId: string;
     objectKey: string;
-    crop: { x: number; y: number; size: number };
+    crop: Crop;
   }) {
-    try {
+    await this.runProcessingJob(event.mediaId, async () => {
+      assertValidCrop(event.crop);
+
       const original = await this.s3Service.downloadObject(event.objectKey);
       const placeholder = await this.generatePlaceholder(original);
       const { x, y, size } = event.crop;
@@ -79,7 +90,7 @@ export class ImageProcessorService {
         .png()
         .toBuffer();
 
-      const avatarKey = event.objectKey.replace(/(\.\w+)$/, '_avatar.png');
+      const avatarKey = deriveVariantKey(event.objectKey, '_avatar.png');
       const avatarBucket = this.config.getOrThrow<string>('AVATAR_BUCKET');
       await this.s3Service.uploadBuffer(
         avatarKey,
@@ -94,11 +105,7 @@ export class ImageProcessorService {
       });
 
       this.logger.log(`Аватар обработан: ${event.mediaId}`);
-    } catch (error) {
-      this.logger.error(
-        `Ошибка обработки аватара ${event.mediaId}: ${error.message}`,
-      );
-    }
+    });
   }
 
   async generatePlaceholder(original: Buffer): Promise<string> {
@@ -109,5 +116,41 @@ export class ImageProcessorService {
       .toBuffer();
 
     return `data:image/jpeg;base64,${buffer.toString('base64')}`;
+  }
+
+  /**
+   * Shared error boundary: RMQ event handlers must never throw (an
+   * unhandled rejection here would crash the process), but a swallowed
+   * error still needs to be loud in the logs so failures aren't silently
+   * invisible.
+   */
+  private async runProcessingJob(mediaId: string, job: () => Promise<void>) {
+    try {
+      await job();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Ошибка обработки ${mediaId}: ${message}`);
+    }
+  }
+}
+
+function deriveVariantKey(objectKey: string, suffix: string): string {
+  return objectKey.replace(/(\.\w+)$/, suffix);
+}
+
+function assertValidCrop(crop: Crop) {
+  const { x, y, size } = crop;
+  const isValid =
+    Number.isInteger(x) &&
+    Number.isInteger(y) &&
+    Number.isInteger(size) &&
+    x >= 0 &&
+    y >= 0 &&
+    size > 0;
+
+  if (!isValid) {
+    throw new BadRequestException(
+      `Некорректные параметры обрезки: ${JSON.stringify(crop)}`,
+    );
   }
 }

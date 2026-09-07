@@ -1,6 +1,7 @@
 import { Controller, Logger } from '@nestjs/common';
 import { EventPattern, Payload } from '@nestjs/microservices';
 import { ImageProcessorService } from './image-processor.service';
+import { MAX_IMAGE_BYTES } from './processing-limits';
 
 interface FileUploadedEvent {
   mediaId: string;
@@ -27,6 +28,20 @@ export class ImageProcessorController {
       return;
     }
 
+    if (event.sizeBytes > MAX_IMAGE_BYTES) {
+      this.logger.warn(
+        `Пропускаем ${event.mediaId} — размер ${event.sizeBytes} превышает лимит ${MAX_IMAGE_BYTES}`,
+      );
+      return;
+    }
+
+    if (!isSafeObjectKey(event.objectKey)) {
+      this.logger.warn(
+        `Пропускаем ${event.mediaId} — недопустимый objectKey: ${event.objectKey}`,
+      );
+      return;
+    }
+
     if (event.purpose === 'avatar') {
       if (!event.crop) {
         this.logger.warn(
@@ -43,4 +58,12 @@ export class ImageProcessorController {
       await this.imageProcessorService.processImage(event);
     }
   }
+}
+
+function isSafeObjectKey(objectKey: string): boolean {
+  return (
+    objectKey.length > 0 &&
+    !objectKey.startsWith('/') &&
+    !objectKey.includes('..')
+  );
 }

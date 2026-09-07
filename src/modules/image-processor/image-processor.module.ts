@@ -2,8 +2,8 @@ import { Module } from '@nestjs/common';
 import { ImageProcessorService } from './image-processor.service';
 import { ImageProcessorController } from './image-processor.controller';
 import { ClientsModule, Transport } from '@nestjs/microservices';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { S3Module } from '../s3/s3.module';
+import { ConfigService } from '@nestjs/config';
+import { S3Module } from '@modules/s3/s3.module';
 
 @Module({
   imports: [
